@@ -15,15 +15,8 @@ Usage:
 Dependencies: datasets, networkx
 """
 
-import argparse
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 from typing import Iterable, Optional
-from py2graph.make_graph import make_graph_from_github
-
+from ..py2graph.make_graph import make_graph_from_github, save_graph_picture_to_file
 import networkx as nx
 from datasets import load_dataset
 
@@ -43,4 +36,7 @@ for sample in samples_from_dataset(limit=1):
         repo_url = f"https://github.com/{repo}"
         setup_commit = f"{sample.get('environment_setup_commit', None)}"
         
-        make_graph_from_github(repo_name, repo_url, setup_commit)
+        graph: Optional[nx.DiGraph] = make_graph_from_github(repo_name, repo_url, setup_commit)
+
+        if graph:
+            save_graph_picture_to_file(graph, f"plots/{repo_name}_graph.png")
