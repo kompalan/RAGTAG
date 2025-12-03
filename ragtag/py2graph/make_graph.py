@@ -24,6 +24,7 @@ class EdgeType(Enum):
     DEFINES = 0 # Modules defining classes/functions
     OWNS    = 1 # Classes defining functions/attributes
     IMPORTS = 2 # Modules/Classes/Functions importing modules
+    CALLS   = 3 # Functions calling other functions
 
 class Node:
     def __init__(self, name: Any, node: Any, type: NodeType):
@@ -83,9 +84,9 @@ class ModuleDependencies(ast.NodeVisitor):
 
         super().generic_visit(node)
     
-    def visit_alias(self, node: Any) -> Any:
+    def visit_alias(self, node: ast.alias) -> Any:
         # import module as alias
-        self.imports.add(node)
+        self.imports.add(Node(node.name, node, NodeType.MODULE))
         super().generic_visit(node)
     
     def visit_TypeAlias(self, node: Any) -> Any:
@@ -95,6 +96,7 @@ class ModuleDependencies(ast.NodeVisitor):
         class_node = Node(node.name, node, NodeType.CLASS)
         self.defined_classes[node.name] = class_node
         self.subgraph.add_node(class_node)
+        self.subgraph.add_edge(self.module, class_node, edge_type=EdgeType.DEFINES)
         
         self.class_stack.append(class_node)
         super().generic_visit(node)
@@ -131,7 +133,9 @@ class ModuleDependencies(ast.NodeVisitor):
         # Add an edge between child and parent
         if parent_class:
             self.subgraph.add_edge(self.class_stack[-1], function_node, edge_type=EdgeType.OWNS)
-        
+        else:
+            self.subgraph.add_edge(self.module, function_node, edge_type=EdgeType.DEFINES)
+
         super().generic_visit(node)
         self.function_stack.pop()
     
@@ -150,25 +154,42 @@ class ModuleDependencies(ast.NodeVisitor):
                 module_name = node.func.value.id
         
         function_tuple = (module_name, class_name, func_name)
+        parent_function_or_module = self.function_stack[-1] if len(self.function_stack) > 0 else self.module
         if (module_name, class_name, func_name) not in self.defined_functions:
             print(f"Couldn't resolve {func_name}!")
-            self.unresolved_calls[(module_name, class_name, func_name)] = self.function_stack[-1]
+            self.unresolved_calls[(module_name, class_name, func_name)] = parent_function_or_module
         else:
             # Get me the function def for this call, and connect it to the latest called
             # function
             print(f"Yay! Resolved {func_name}")
-            self.subgraph.add_edge(self.function_stack[-1], self.defined_functions[function_tuple])
+            self.subgraph.add_edge(parent_function_or_module, self.defined_functions[function_tuple], edge_type=EdgeType.CALLS)
 
         return super().generic_visit(node)
-    
 
-def make_graph_from_src (src_path: str):
+def save_graph_picture_to_file(graph: nx.DiGraph, filepath: str, size: Tuple[int, int]=(40, 40), dpi: int=500, font_size: int=2):
+    """Save a picture of the graph to a file.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=size, dpi=dpi)
+    pos = nx.spring_layout(graph)
+    # Draw nodes and labels separately and draw edges with arrows for directed graphs
+    nx.draw_networkx_nodes(graph, pos, node_size=500, node_color="lightblue")
+
+    label_data = {node:node.name for node in graph}
+    edge_data = {(u, v): d['edge_type'].name for u, v, d in graph.edges(data=True)}
+    nx.draw_networkx_labels(graph, pos, labels=label_data, font_size=font_size, font_weight="bold")
+    nx.draw_networkx_edges(graph, pos, arrows=True)
+    nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_data, font_size=font_size)
+    plt.axis('off')
+    plt.savefig(filepath)
+    plt.close()
+
+
+def make_subgraphs(root_path: str) -> List[Tuple[nx.DiGraph, ModuleDependencies]]:
     """Given a file path to a root directory, traverse subdirectories
     for python files and make a graph of function dependencies.
     """
-    from pathlib import Path
-    root_path = str(Path(src_path).resolve())
-
     # Rglob traverse for python files.
     print(f"Got: {root_path}")
     def find_python_files (path: str):
@@ -179,7 +200,7 @@ def make_graph_from_src (src_path: str):
     py_files = find_python_files(root_path)
     print(f"Found {len(py_files)} python files.")
     
-    subgraphs: List[nx.DiGraph] = []
+    subgraphs: List[Tuple[nx.DiGraph, ModuleDependencies]] = []
     for py_file in py_files:
         print(f"Processing file: {py_file}")
 
@@ -192,14 +213,59 @@ def make_graph_from_src (src_path: str):
             visitor.visit(tree)
 
             context.add_module(py_file, (py_file, module_name, visitor))
-            subgraphs.append(visitor.get_subgraph())
+            subgraphs.append((visitor.get_subgraph(), visitor))
 
     return subgraphs
+
+def link_subgraphs (subgraphs: List[Tuple[nx.DiGraph, ModuleDependencies]]) -> nx.DiGraph:
+    """Given a list of subgraphs, link them together based on imports.
+    """
+    dep_graph = nx.DiGraph()
+    for subgraph, visitor in subgraphs:
+        dep_graph = nx.compose(dep_graph, subgraph)
+    
+    # For each node in each subgraph, check its imports and link to other subgraphs.
+    for subgraph, visitor in subgraphs:
+        for import_node in visitor.imports:
+            import_name = None
+            if isinstance(import_node.node, ast.alias):
+                import_name = import_node.name
+            elif isinstance(import_node.node, Node):
+                import_name = import_node.name
+            else:
+                continue
+            
+            # Check if this import_name matches any module in other subgraphs
+            # TODO: Lots of cases to consider here for matching imports to modules. 
+            # TODO: Will need to optimize the triple nested loop here.
+            for other_subgraph, other_visitor in subgraphs:
+                if other_visitor.toplevel_name == import_name:
+                    # Link the module nodes
+                    dep_graph.add_edge(visitor.module, other_visitor.module, edge_type=EdgeType.IMPORTS)
+
+                for (mod_name, class_name, func_name), function_node in visitor.unresolved_calls.items():
+                    for (mod_name2, class_name2, func_name2), other_function_node in other_visitor.defined_functions.items():
+                        if (func_name == func_name2) and (mod_name == mod_name2) and (class_name == class_name2):
+                            # Link the function nodes
+                            dep_graph.add_edge(function_node, other_function_node, edge_type=EdgeType.CALLS)
+    
+    return dep_graph
+
+def make_graph_from_src (src_path: str):
+    """Given a file path to a root directory, traverse subdirectories
+    for python files and make a graph of function dependencies.
+    """
+    from pathlib import Path
+    root_path = str(Path(src_path).resolve())
+    subgraphs = make_subgraphs(root_path)
+    dep_graph = link_subgraphs(subgraphs)
+    return dep_graph
 
 def make_graph_from_github (repo_name: str, repo_url: Optional[str], commit_hash: Optional[str], target_path: str = "/tmp"):
     """Given a repo name and an optional commit hash, 
     clone repo and checkout to commit hash before traversing.
     """
+    graph: Optional[nx.DiGraph] = None
     if repo_url:
         path = f"{target_path}/{repo_name}"
 
@@ -215,7 +281,6 @@ def make_graph_from_github (repo_name: str, repo_url: Optional[str], commit_hash
                 repo.git.checkout(commit_hash)
 
             # Call make_graph_from_src on the root path.
-            py_files = make_graph_from_src(str(repo.working_tree_dir))
-            return py_files
-        
-    return []
+            graph = make_graph_from_src(str(repo.working_tree_dir))
+
+    return graph

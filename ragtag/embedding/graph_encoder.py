@@ -100,6 +100,7 @@ class GT(nn.Module):
         return self.readout(g).squeeze(-1)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(device)
 in_dim = train_ds.num_node_features
 model = GT(in_channels=in_dim, pe_dim=k).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
