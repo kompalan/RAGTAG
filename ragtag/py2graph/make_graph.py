@@ -7,13 +7,16 @@ from enum import Enum
 import networkx as nx
 import itertools
 import logging
-from lsp_client import PyrightLsp
-import datetime
+from ragtag.py2graph.lsp_client import PyrightLsp
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from uuid import uuid4
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    filename=f"logs/{datetime.date.today()}/{__name__}.log",
+    filename=f"{__name__}.log",
     format="%(levelname)s - %(name)s - %(message)s",
     level=logging.INFO,
 )
@@ -21,11 +24,7 @@ logging.basicConfig(
 
 class GlobalContext:
     def __init__(self):
-        # Relate module names to subgraph
-        self.found_modules = {}
-
-    def add_module(self, module, value):
-        self.found_modules[module] = value
+        self.lsp = None
 
 
 class NodeType(Enum):
@@ -47,6 +46,12 @@ class Node:
         self.name = name
         self.node = node
         self.type = type
+        self.uuid = uuid4()
+
+    #
+    # def __str__(self):
+    #     return f"Node:\n\tName: {self.name}\n\tType: {str(self.type)}\n\tUUID: {str(self.uuid)}"
+    #
 
 
 class FunctionNode(Node):
@@ -56,20 +61,29 @@ class FunctionNode(Node):
 
 
 class ModuleDependencies(ast.NodeVisitor):
-    FunctionTuple = Tuple[Optional[str], Optional[str], Optional[str]]
 
-    def __init__(self, module_name: str, filepath: str, context: GlobalContext):
-        self.context: GlobalContext = context
+    @dataclass
+    class UnresolvedCall:
+        func_name: str
+        start_line: int
+        end_line: int
+        callsite: Tuple[int, int]
+
+        def __hash__(self):
+            return hash((self.func_name, self.start_line, self.end_line, self.callsite))
+
+    def __init__(self, module_name: str, filepath: str, lsp: PyrightLsp):
         self.subgraph: nx.DiGraph = nx.DiGraph()
 
         self.deps: Dict = {}
         self.filepath: str = filepath
         self.toplevel_name: str = module_name
+        self.filepos_to_nodes: Dict[int, List[Node]] = defaultdict(list)
 
         self.class_stack: List[Node] = []
         self.function_stack: List[Node] = []
 
-        self.defined_functions: Dict[ModuleDependencies.FunctionTuple, Node] = {}
+        self.defined_functions: Dict[ModuleDependencies.UnresolvedCall, Node] = {}
         self.defined_classes: Dict[str, Node] = dict()
         self.defined_bases: Dict[str, List[Node]] = dict()
         self.imports: Set[Node] = set()
@@ -78,9 +92,11 @@ class ModuleDependencies(ast.NodeVisitor):
         self.unresolved_calls: Dict[ModuleDependencies.FunctionTuple, Node] = {}
         self.aliases: Dict[str, str] = {}
 
-        self.source: str = ""
+        self.lsp = lsp
+
+        self.source: List[str] = []
         with open(self.filepath, "r") as f:
-            self.source = f.read()
+            self.source = f.read().splitlines()
 
         self.module = Node(module_name, None, NodeType.MODULE)
         self.subgraph.add_node(self.module)
@@ -125,10 +141,13 @@ class ModuleDependencies(ast.NodeVisitor):
 
         class_node = Node(node.name, node, NodeType.CLASS)
         self.defined_classes[node.name] = class_node
-        self.defined_functions[(self.toplevel_name, node.name, "A")] = FunctionNode(
-            node.name, node
-        )
 
+        # TODO: Find a better way to add a constructor. Maybe add a function call when __init__ is defined?
+        # self.defined_functions[(self.toplevel_name, node.name, "A")] = FunctionNode(
+        #     node.name, node, None
+        # )
+        #
+        self.filepos_to_nodes[node.lineno].append(class_node)
         self.subgraph.add_node(class_node)
         self.subgraph.add_edge(self.module, class_node, edge_type=EdgeType.DEFINES)
 
@@ -147,7 +166,7 @@ class ModuleDependencies(ast.NodeVisitor):
                 decorator_names = "\n".join(
                     [f"@{ast.unparse(deco)}" for deco in node.decorator_list]
                 )
-                seg = ast.get_source_segment(self.source, node)
+                seg = ast.get_source_segment("\n".join(self.source), node)
                 function_src = f"{decorator_names}\n{seg}"
             except Exception as e:
                 logger.warning(f"Could not get source segment: {e}\n")
@@ -167,10 +186,12 @@ class ModuleDependencies(ast.NodeVisitor):
             fully_qualified_name = f"{self.toplevel_name}.{function_name}"
 
         function_node = FunctionNode(fully_qualified_name, node, function_src)
+        self.filepos_to_nodes[node.lineno].append(function_node)
         self.subgraph.add_node(function_node)
         self.defined_functions[(self.toplevel_name, parent_class, function_name)] = (
             function_node
         )
+
         self.function_stack.append(function_node)
         # Add an edge between child and parent
         if parent_class:
@@ -185,13 +206,26 @@ class ModuleDependencies(ast.NodeVisitor):
         super().generic_visit(node)
         self.function_stack.pop()
 
+    def _get_callsite_position(
+        self, start_line: int, code_lines: List[str], symbol: str
+    ):
+        def py_col_to_lsp_col(line: str, col: int) -> int:
+            return len(line[:col].encode("utf-16-le")) // 2
+
+        for i, line in enumerate(code_lines):
+            pos = line.find(symbol)
+            if pos != -1:
+                return (start_line + i + 1, py_col_to_lsp_col(line, pos))
+        else:
+            return (None, None)
+
     def visit_Call(self, node: ast.Call) -> Any:
         logger.info(f"Visiting Call Node: {ast.dump(node, indent=4)}")
 
         # This should add an edge between function and node
-        func_name = []
-        class_name = []
-        module_name = []
+        func_name = None
+        class_name = None
+        module_name = None
 
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
@@ -203,23 +237,40 @@ class ModuleDependencies(ast.NodeVisitor):
                 # If we're in a class, the function call could be special, like super()
                 # This gets complicated fast, especially because we don't have MRO information here.
                 # Instead, we concede that super() can refer to any of the base classes.
-                if (
-                    isinstance(node.func.value.func, ast.Name)
-                    and node.func.value.func.id == "super"
-                ):
-                    for base in self.defined_bases[self.class_stack[-1]]:
-                        if base in self.aliases:
-                            module_name = self.aliases[base]
+                # TODO: Mostly we're going to rely on the LSP to deal with this. But we might need
+                # to have some heuristic in case the LSP can't find the definition
+                pass
 
         function_tuple = (module_name, class_name, func_name)
         parent_function_or_module = (
             self.function_stack[-1] if len(self.function_stack) > 0 else self.module
         )
-        if (module_name, class_name, func_name) not in self.defined_functions:
-            logger.warning(f"Couldn't resolve {func_name}!")
-            self.unresolved_calls[(module_name, class_name, func_name)] = (
-                parent_function_or_module
+
+        if tuple((module_name, class_name, func_name)) not in self.defined_functions:
+            source_dump = "\n".join(
+                [f"{i+1}\t{seg}" for i, seg in enumerate(self.source)]
             )
+
+            segment = "\n".join(self.source[node.lineno - 1 : node.end_lineno])
+
+            position = (
+                node.lineno - 1,
+                node.end_lineno,
+                self._get_callsite_position(
+                    node.lineno - 1,
+                    self.source[node.lineno - 1 : node.end_lineno],
+                    func_name,
+                ),
+            )
+
+            logger.warning(
+                f"Couldn't resolve {func_name}. Here's the function I found {position}:\n{segment}\nFull Source:\n === START SOURCE ===\n{source_dump}\n==== END SOURCE ===\n"
+            )
+            self.unresolved_calls[
+                ModuleDependencies.UnresolvedCall(
+                    func_name, position[0], position[1], position[2]
+                )
+            ] = parent_function_or_module
         else:
             # Get me the function def for this call, and connect it to the latest called
             # function
@@ -236,11 +287,18 @@ class ModuleDependencies(ast.NodeVisitor):
 
 
 class Subgraph:
-    def __init__(self, graph: nx.DiGraph, visitor: ModuleDependencies):
+    def __init__(self, graph: nx.DiGraph, lsp: PyrightLsp, visitor: ModuleDependencies):
         self.graph = graph
         self.visitor = visitor
+        self.lsp = lsp
 
-    def _link_imports(self, other_subgraph: Subgraph, merged_graph: nx.DiGraph):
+    def _link_imports(
+        self,
+        src_path: str,
+        other_subgraph: Subgraph,
+        merged_graph: nx.DiGraph,
+        subgraphs: Dict[str, Subgraph],
+    ):
         for import_node in self.visitor.imports:
             import_name = None
             if isinstance(import_node.node, ast.ImportFrom) or isinstance(
@@ -262,27 +320,60 @@ class Subgraph:
 
         return merged_graph
 
-    @contextmanager
-    def lsp(workspace_root: str = "."):
-        lsp = PyrightLsp(workspace_root=workspace_root)
+    def _link_functions(
+        self,
+        src_path: str,
+        other_subgraph: Subgraph,
+        merged_graph: nx.DiGraph,
+        subgraphs: Dict[str, Subgraph],
+    ):
+        logger.info(f"Starting LSP Server with Source Path: {src_path}")
+        for unresolved_call, function_node in self.visitor.unresolved_calls.items():
+            file_path = self.visitor.filepath
+            row, column = unresolved_call.callsite
+            self.lsp.open_file(file_path)
+            logger.info(
+                f"Attempting to find definition for {unresolved_call.func_name} ({self.visitor.filepath}:{(row, column)})"
+            )
+            symbol_definition = self.lsp.definition(file_path, row - 1, column)
 
-        try:
-            lsp.start()
-            yield lsp
-        finally:
-            lsp.stop()
+            if symbol_definition:
+                logger.info(f"Found definition!\n{symbol_definition}")
+                for location in symbol_definition:
+                    if location.uri in subgraphs:
+                        logger.info(f"Found Subgraph for URI: {location.uri}")
+                        linked_subgraph = subgraphs[location.uri]
 
-    def _link_functions(self, other_subgraph: Subgraph, merged_graph: nx.DiGraph):
-        with self.lsp(".") as lsp:
-            for (
-                file_path,
-                symbol,
-                position,
-            ), function_node in self.visitor.unresolved_calls.items():
-                col, row = position
-                symbol_definition = lsp.definition(file_path, row, col)
-                print(symbol_definition)
+                        logger.info(
+                            f"Looking for {unresolved_call.func_name} in linked visitor"
+                        )
 
+                        print(
+                            {
+                                i: [node.name for node in nodes]
+                                for i, nodes in linked_subgraph.visitor.filepos_to_nodes.items()
+                            }
+                        )
+                        if (
+                            location.range.start.line + 1
+                            in linked_subgraph.visitor.filepos_to_nodes
+                        ):
+                            logger.info(
+                                f"Found Nodes on Line {location.range.start.line + 1}"
+                            )
+                            for node in linked_subgraph.visitor.filepos_to_nodes[
+                                location.range.start.line + 1
+                            ]:
+                                logger.info(f"Searching Node: {node.name}")
+                                if unresolved_call.func_name in node.name:
+                                    logger.info(f"Found matching Node: {node}")
+                                    merged_graph.add_edge(
+                                        function_node, node, edge_type=EdgeType.CALLS
+                                    )
+            else:
+                logger.warning(
+                    f"Did not find a definition for {unresolved_call.func_name}. Details of the query: {(file_path, row, column)}"
+                )
             # for (
             #     mod_name,
             #     class_name,
@@ -310,13 +401,31 @@ class Subgraph:
             #
         return merged_graph
 
-    def _link_classes(self, other_subgraph: Subgraph, merged_graph: nx.DiGraph):
+    def _link_classes(
+        self,
+        src_path: str,
+        other_subgraph: Subgraph,
+        merged_graph: nx.DiGraph,
+        subgraphs: Dict[str, Subgraph],
+    ):
         return merged_graph
 
-    def link(self, other_subgraph: Subgraph, merged_graph: nx.DiGraph):
-        merged_graph = self._link_imports(other_subgraph, merged_graph)
-        merged_graph = self._link_functions(other_subgraph, merged_graph)
-        merged_graph = self._link_classes(other_subgraph, merged_graph)
+    def link(
+        self,
+        src_path: str,
+        other_subgraph: Subgraph,
+        merged_graph: nx.DiGraph,
+        subgraphs: Dict[str, Subgraph],
+    ):
+        merged_graph = self._link_imports(
+            src_path, other_subgraph, merged_graph, subgraphs
+        )
+        merged_graph = self._link_functions(
+            src_path, other_subgraph, merged_graph, subgraphs
+        )
+        merged_graph = self._link_classes(
+            src_path, other_subgraph, merged_graph, subgraphs
+        )
         return merged_graph
 
 
@@ -347,7 +456,9 @@ def save_graph_picture_to_file(
     plt.close()
 
 
-def make_subgraphs(root_path: str) -> List[Tuple[nx.DiGraph, ModuleDependencies]]:
+def make_subgraphs(
+    root_path: str, lsp: PyrightLsp
+) -> List[Tuple[nx.DiGraph, ModuleDependencies]]:
     """Given a file path to a root directory, traverse subdirectories
     for python files and make a graph of function dependencies.
     """
@@ -363,37 +474,52 @@ def make_subgraphs(root_path: str) -> List[Tuple[nx.DiGraph, ModuleDependencies]
     py_files = find_python_files(root_path)
     logger.info(f"Found {len(py_files)} python files.")
 
-    subgraphs: List[Subgraph] = []
+    subgraphs: Dict[str, Subgraph] = {}
     for py_file in py_files:
         logger.info(f"Processing file: {py_file}")
 
-        context: GlobalContext = GlobalContext()
+        # logger.info(f"Sending didOpen for: {py_file}")
+        # lsp.open_file(py_file)
         with open(py_file, "r") as f:
             source_code = f.read()
             tree = ast.parse(source_code)
             module_name = py_file.stem
             visitor = ModuleDependencies(
-                module_name=module_name, filepath=str(py_file), context=context
+                module_name=module_name, filepath=str(py_file), lsp=lsp
             )
             visitor.visit(tree)
 
-            context.add_module(py_file, (py_file, module_name, visitor))
-            subgraphs.append(Subgraph(visitor.get_subgraph(), visitor))
+            subgraphs[(Path(py_file).resolve()).as_uri()] = Subgraph(
+                visitor.get_subgraph(), lsp, visitor
+            )
 
     return subgraphs
 
 
-def link_subgraphs(subgraphs: List[Subgraph], src_path: str) -> nx.DiGraph:
+def link_subgraphs(
+    subgraphs: Dict[str, Subgraph], src_path: str, lsp: PyrightLsp
+) -> nx.DiGraph:
     """Given a list of subgraphs, link them together based on imports."""
     dep_graph = nx.DiGraph()
-    for subgraph in subgraphs:
+    for uri, subgraph in subgraphs.items():
         dep_graph = nx.compose(dep_graph, subgraph.graph)
 
     # For each unique pair of subgraphs, link functions, imports and classes
-    for subgraph_a, subgraph_b in itertools.combinations(subgraphs, 2):
-        dep_graph = subgraph_a.link(subgraph_b, dep_graph)
+    for subgraph_a, subgraph_b in itertools.combinations(subgraphs.values(), 2):
+        dep_graph = subgraph_a.link(src_path, subgraph_b, dep_graph, subgraphs)
 
     return dep_graph
+
+
+@contextmanager
+def make_lsp(workspace_root: str = "."):
+    lsp = PyrightLsp(workspace_root=workspace_root)
+
+    try:
+        lsp.start()
+        yield lsp
+    finally:
+        lsp.stop()
 
 
 def make_graph_from_src(src_path: str):
@@ -402,9 +528,10 @@ def make_graph_from_src(src_path: str):
     """
     from pathlib import Path
 
-    root_path = str(Path(src_path).resolve())
-    subgraphs = make_subgraphs(root_path)
-    dep_graph = link_subgraphs(subgraphs)
+    with make_lsp(src_path) as lsp:
+        root_path = str(Path(src_path).resolve())
+        subgraphs = make_subgraphs(root_path, lsp)
+        dep_graph = link_subgraphs(subgraphs, root_path, lsp)
     return dep_graph
 
 
