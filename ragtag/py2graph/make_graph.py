@@ -3,7 +3,6 @@ from typing import Optional, Any, Dict, List, Set, Tuple
 import ast
 from git import Repo
 import shutil
-from enum import Enum
 import networkx as nx
 import itertools
 import logging
@@ -11,8 +10,8 @@ from ragtag.py2graph.lsp_client import PyrightLsp
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 from collections import defaultdict
+from ragtag.py2graph.graph_types import NodeType, EdgeType, Node, FunctionNode
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -23,47 +22,23 @@ logging.basicConfig(
 
 
 class GlobalContext:
+
     def __init__(self):
         self.lsp = None
-
-
-class NodeType(Enum):
-    MODULE = 0
-    FUNCTION = 1
-    CLASS = 2
-
-
-class EdgeType(Enum):
-    DEFINES = 0  # Modules defining classes/functions
-    OWNS = 1  # Classes defining functions/attributes
-    IMPORTS = 2  # Modules/Classes/Functions importing modules
-    CALLS = 3  # Functions calling other functions
-    INHERITS_FROM = 4  # Classes inheriting from other classes
-
-
-class Node:
-    def __init__(self, name: Any, node: Any, type: NodeType):
-        self.name = name
-        self.node = node
-        self.type = type
-        self.uuid = uuid4()
-
-    #
-    # def __str__(self):
-    #     return f"Node:\n\tName: {self.name}\n\tType: {str(self.type)}\n\tUUID: {str(self.uuid)}"
-    #
-
-
-class FunctionNode(Node):
-    def __init__(self, name: Any, node: Any, function_src: Optional[str]):
-        super().__init__(name, node, NodeType.FUNCTION)
-        self.function_src = function_src
+        self.linking_table
 
 
 class ModuleDependencies(ast.NodeVisitor):
 
     @dataclass
-    class UnresolvedCall:
+    class BaseClass:
+        base_name: str
+        start_line: int
+        end_line: int
+        callsite: Tuple[int, int]
+
+    @dataclass
+    class FunctionCall:
         func_name: str
         start_line: int
         end_line: int
@@ -83,13 +58,14 @@ class ModuleDependencies(ast.NodeVisitor):
         self.class_stack: List[Node] = []
         self.function_stack: List[Node] = []
 
-        self.defined_functions: Dict[ModuleDependencies.UnresolvedCall, Node] = {}
+        self.defined_functions: Dict[ModuleDependencies.FunctionCall, Node] = {}
         self.defined_classes: Dict[str, Node] = dict()
         self.defined_bases: Dict[str, List[Node]] = dict()
         self.imports: Set[Node] = set()
 
         # Call to function from function
-        self.unresolved_calls: Dict[ModuleDependencies.FunctionTuple, Node] = {}
+        self.unresolved_calls: Dict[ModuleDependencies.FunctionCall, Node] = {}
+        self.unresolved_inheritance: Dict
         self.aliases: Dict[str, str] = {}
 
         self.lsp = lsp
@@ -99,6 +75,7 @@ class ModuleDependencies(ast.NodeVisitor):
             self.source = f.read().splitlines()
 
         self.module = Node(module_name, None, NodeType.MODULE)
+        self.module.src = "\n".join(self.source)
         self.subgraph.add_node(self.module)
 
     def get_subgraph(self) -> nx.DiGraph:
@@ -140,6 +117,7 @@ class ModuleDependencies(ast.NodeVisitor):
         logger.info(f"Visiting ClassDef Node: {ast.dump(node, indent=4)}")
 
         class_node = Node(node.name, node, NodeType.CLASS)
+        class_node.src = "\n".join(self.source[node.lineno - 1 : node.end_lineno])
         self.defined_classes[node.name] = class_node
 
         # TODO: Find a better way to add a constructor. Maybe add a function call when __init__ is defined?
@@ -148,17 +126,25 @@ class ModuleDependencies(ast.NodeVisitor):
         # )
         #
         self.filepos_to_nodes[node.lineno].append(class_node)
+
         self.subgraph.add_node(class_node)
         self.subgraph.add_edge(self.module, class_node, edge_type=EdgeType.DEFINES)
 
         for base in node.bases:
             self.defined_bases[node.name] = node.bases
+
         self.class_stack.append(class_node)
         super().generic_visit(node)
         self.class_stack.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
         logger.info(f"Visiting FunctionDef Node: {ast.dump(node, indent=4)}")
+
+        # NOTE: Ignoring __init__ for now, as we already record constructors during
+        # visit_ClassDef
+        if node.name == "__init__":
+            super().generic_visit(node)
+            return
 
         def get_function_source_segment(node: ast.FunctionDef):
             function_src = None
@@ -212,6 +198,11 @@ class ModuleDependencies(ast.NodeVisitor):
         def py_col_to_lsp_col(line: str, col: int) -> int:
             return len(line[:col].encode("utf-16-le")) // 2
 
+        if symbol is None:
+            logger.error(
+                f"Symbol passed was None. Code Lines:\n{'\n'.join(code_lines)}"
+            )
+
         for i, line in enumerate(code_lines):
             pos = line.find(symbol)
             if pos != -1:
@@ -239,7 +230,16 @@ class ModuleDependencies(ast.NodeVisitor):
                 # Instead, we concede that super() can refer to any of the base classes.
                 # TODO: Mostly we're going to rely on the LSP to deal with this. But we might need
                 # to have some heuristic in case the LSP can't find the definition
-                pass
+                logger.info(
+                    f"Value attribute was call: {ast.dump(node.func.value, indent=4)}"
+                )
+                return
+
+        if func_name is None:
+            logger.info(
+                f"Func Name is somehow None. ({module_name, class_name, func_name})"
+            )
+            return
 
         function_tuple = (module_name, class_name, func_name)
         parent_function_or_module = (
@@ -267,7 +267,7 @@ class ModuleDependencies(ast.NodeVisitor):
                 f"Couldn't resolve {func_name}. Here's the function I found {position}:\n{segment}\nFull Source:\n === START SOURCE ===\n{source_dump}\n==== END SOURCE ===\n"
             )
             self.unresolved_calls[
-                ModuleDependencies.UnresolvedCall(
+                ModuleDependencies.FunctionCall(
                     func_name, position[0], position[1], position[2]
                 )
             ] = parent_function_or_module
@@ -301,10 +301,12 @@ class Subgraph:
     ):
         for import_node in self.visitor.imports:
             import_name = None
-            if isinstance(import_node.node, ast.ImportFrom) or isinstance(
-                import_node.node, ast.Import
-            ):
+            if isinstance(import_node.node, ast.ImportFrom):
                 import_name = import_node.node.module
+            if isinstance(import_node.node, ast.Import):
+                # TODO: We're only taking the first name here. This WILL break
+                # for multiple imports. On the list to fix
+                import_name = import_node.node.names[0]
             else:
                 continue
 
@@ -483,6 +485,14 @@ def make_subgraphs(
         with open(py_file, "r") as f:
             source_code = f.read()
             tree = ast.parse(source_code)
+            # try:
+            #     tree = ast.parse(source_code)
+            # except SyntaxError as e:
+            #     logger.info(
+            #         f"Skipping file {py_file} due to SyntaxError thrown by ast: {str(e)}"
+            #     )
+            #     continue
+            #
             module_name = py_file.stem
             visitor = ModuleDependencies(
                 module_name=module_name, filepath=str(py_file), lsp=lsp
@@ -547,11 +557,13 @@ def make_graph_from_github(
     graph: Optional[nx.DiGraph] = None
     if repo_url:
         path = f"{target_path}/{repo_name}"
-
+        if commit_hash:
+            path = path + f"_{commit_hash}"
+        print(f"Creating path {path}")
         shutil.rmtree(path, ignore_errors=True)
 
         # Clone repo from github to path
-        repo = Repo.clone_from(repo_url, f"{target_path}/{repo_name}")
+        repo = Repo.clone_from(repo_url, path)
 
         if repo.working_tree_dir:
             # Checkout to commit_hash if applicable

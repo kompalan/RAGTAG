@@ -20,6 +20,7 @@ from ..py2graph.make_graph import make_graph_from_github, save_graph_picture_to_
 import networkx as nx
 from datasets import load_dataset
 
+
 def samples_from_dataset(limit: Optional[int] = None) -> Iterable[dict]:
     ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="dev")
     for i, item in enumerate(ds):
@@ -27,22 +28,23 @@ def samples_from_dataset(limit: Optional[int] = None) -> Iterable[dict]:
             break
         yield item
 
+
 seen = set()
 for sample in samples_from_dataset(limit=None):
-    repo = sample.get('repo', None)
+    repo = sample.get("repo", None)
 
     if repo:
-        repo_name = repo.split('/')[-1]
+        repo_name = repo.split("/")[-1]
         repo_url = f"https://github.com/{repo}"
         setup_commit = f"{sample.get('environment_setup_commit', None)}"
 
-        if repo_name in seen:
-            continue
-
-        seen.add(repo_name)
-
-        graph: Optional[nx.DiGraph] = make_graph_from_github(repo_name, repo_url, setup_commit)
+        graph: Optional[nx.DiGraph] = make_graph_from_github(
+            repo_name, repo_url, setup_commit
+        )
 
         if graph:
             print(f"Writing {repo_name}")
-            save_graph_picture_to_file(graph, f"plots/swebench_graphs/{repo_name}_graph.png")
+            save_graph_picture_to_file(
+                graph, f"plots/swebench_graphs/{repo_name}_graph_{setup_commit}.png"
+            )
+    break
