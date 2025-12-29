@@ -1,0 +1,421 @@
+INFO - ragtag.py2graph.make_graph - Got: /home/anurag/projects/ml/RAGTAG/tests/golden/simple_test
+INFO - ragtag.py2graph.make_graph - Found 2 python files.
+INFO - ragtag.py2graph.make_graph - Processing file: /home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py
+INFO - ragtag.py2graph.make_graph - Visiting ImportFrom Node: ImportFrom(
+    module='module_b',
+    names=[
+        alias(name='function_e'),
+        alias(name='B')],
+    level=0)
+INFO - ragtag.py2graph.make_graph - Visiting Alias Node: alias(name='function_e')
+INFO - ragtag.py2graph.make_graph - Visiting Alias Node: alias(name='B')
+INFO - ragtag.py2graph.make_graph - Visiting ClassDef Node: ClassDef(
+    name='A',
+    bases=[
+        Name(id='B', ctx=Load())],
+    keywords=[],
+    body=[
+        FunctionDef(
+            name='function_d',
+            args=arguments(
+                posonlyargs=[],
+                args=[
+                    arg(arg='self')],
+                kwonlyargs=[],
+                kw_defaults=[],
+                defaults=[]),
+            body=[
+                Expr(
+                    value=Call(
+                        func=Attribute(
+                            value=Call(
+                                func=Name(id='super', ctx=Load()),
+                                args=[],
+                                keywords=[]),
+                            attr='function_c',
+                            ctx=Load()),
+                        args=[],
+                        keywords=[]))],
+            decorator_list=[],
+            type_params=[])],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Visiting FunctionDef Node: FunctionDef(
+    name='function_d',
+    args=arguments(
+        posonlyargs=[],
+        args=[
+            arg(arg='self')],
+        kwonlyargs=[],
+        kw_defaults=[],
+        defaults=[]),
+    body=[
+        Expr(
+            value=Call(
+                func=Attribute(
+                    value=Call(
+                        func=Name(id='super', ctx=Load()),
+                        args=[],
+                        keywords=[]),
+                    attr='function_c',
+                    ctx=Load()),
+                args=[],
+                keywords=[]))],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Found: function_d
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Attribute(
+        value=Call(
+            func=Name(id='super', ctx=Load()),
+            args=[],
+            keywords=[]),
+        attr='function_c',
+        ctx=Load()),
+    args=[],
+    keywords=[])
+INFO - ragtag.py2graph.make_graph - Value attribute was call: Call(
+    func=Name(id='super', ctx=Load()),
+    args=[],
+    keywords=[])
+INFO - ragtag.py2graph.make_graph - Visiting FunctionDef Node: FunctionDef(
+    name='function_a',
+    args=arguments(
+        posonlyargs=[],
+        args=[],
+        kwonlyargs=[],
+        kw_defaults=[],
+        defaults=[]),
+    body=[
+        Expr(
+            value=Call(
+                func=Name(id='print', ctx=Load()),
+                args=[
+                    Constant(value='hello!')],
+                keywords=[])),
+        Assign(
+            targets=[
+                Name(id='a', ctx=Store())],
+            value=Call(
+                func=Name(id='A', ctx=Load()),
+                args=[],
+                keywords=[])),
+        Expr(
+            value=Call(
+                func=Attribute(
+                    value=Name(id='a', ctx=Load()),
+                    attr='function_d',
+                    ctx=Load()),
+                args=[],
+                keywords=[])),
+        Expr(
+            value=Call(
+                func=Name(id='function_e', ctx=Load()),
+                args=[],
+                keywords=[]))],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Found: function_a
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='print', ctx=Load()),
+    args=[
+        Constant(value='hello!')],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve print. Here's the function I found (9, 10, (10, 4)):
+    print("hello!")
+Full Source:
+ === START SOURCE ===
+1	from module_b import function_e, B
+2	
+3	
+4	class A(B):
+5	    def function_d(self):
+6	        super().function_c()
+7	
+8	
+9	def function_a():
+10	    print("hello!")
+11	    a = A()
+12	    a.function_d()
+13	    function_e()
+14	
+15	
+16	function_a()
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='A', ctx=Load()),
+    args=[],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve A. Here's the function I found (10, 11, (11, 8)):
+    a = A()
+Full Source:
+ === START SOURCE ===
+1	from module_b import function_e, B
+2	
+3	
+4	class A(B):
+5	    def function_d(self):
+6	        super().function_c()
+7	
+8	
+9	def function_a():
+10	    print("hello!")
+11	    a = A()
+12	    a.function_d()
+13	    function_e()
+14	
+15	
+16	function_a()
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Attribute(
+        value=Name(id='a', ctx=Load()),
+        attr='function_d',
+        ctx=Load()),
+    args=[],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve function_d. Here's the function I found (11, 12, (12, 6)):
+    a.function_d()
+Full Source:
+ === START SOURCE ===
+1	from module_b import function_e, B
+2	
+3	
+4	class A(B):
+5	    def function_d(self):
+6	        super().function_c()
+7	
+8	
+9	def function_a():
+10	    print("hello!")
+11	    a = A()
+12	    a.function_d()
+13	    function_e()
+14	
+15	
+16	function_a()
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='function_e', ctx=Load()),
+    args=[],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve function_e. Here's the function I found (12, 13, (13, 4)):
+    function_e()
+Full Source:
+ === START SOURCE ===
+1	from module_b import function_e, B
+2	
+3	
+4	class A(B):
+5	    def function_d(self):
+6	        super().function_c()
+7	
+8	
+9	def function_a():
+10	    print("hello!")
+11	    a = A()
+12	    a.function_d()
+13	    function_e()
+14	
+15	
+16	function_a()
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='function_a', ctx=Load()),
+    args=[],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve function_a. Here's the function I found (15, 16, (16, 0)):
+function_a()
+Full Source:
+ === START SOURCE ===
+1	from module_b import function_e, B
+2	
+3	
+4	class A(B):
+5	    def function_d(self):
+6	        super().function_c()
+7	
+8	
+9	def function_a():
+10	    print("hello!")
+11	    a = A()
+12	    a.function_d()
+13	    function_e()
+14	
+15	
+16	function_a()
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Processing file: /home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_b.py
+INFO - ragtag.py2graph.make_graph - Visiting ClassDef Node: ClassDef(
+    name='D',
+    bases=[],
+    keywords=[],
+    body=[
+        FunctionDef(
+            name='__init__',
+            args=arguments(
+                posonlyargs=[],
+                args=[
+                    arg(arg='self')],
+                kwonlyargs=[],
+                kw_defaults=[],
+                defaults=[]),
+            body=[
+                Pass()],
+            decorator_list=[],
+            type_params=[]),
+        FunctionDef(
+            name='function_c',
+            args=arguments(
+                posonlyargs=[],
+                args=[
+                    arg(arg='self')],
+                kwonlyargs=[],
+                kw_defaults=[],
+                defaults=[]),
+            body=[
+                Expr(
+                    value=Call(
+                        func=Name(id='print', ctx=Load()),
+                        args=[
+                            Constant(value='hello from c')],
+                        keywords=[]))],
+            decorator_list=[],
+            type_params=[])],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Visiting FunctionDef Node: FunctionDef(
+    name='__init__',
+    args=arguments(
+        posonlyargs=[],
+        args=[
+            arg(arg='self')],
+        kwonlyargs=[],
+        kw_defaults=[],
+        defaults=[]),
+    body=[
+        Pass()],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Visiting FunctionDef Node: FunctionDef(
+    name='function_c',
+    args=arguments(
+        posonlyargs=[],
+        args=[
+            arg(arg='self')],
+        kwonlyargs=[],
+        kw_defaults=[],
+        defaults=[]),
+    body=[
+        Expr(
+            value=Call(
+                func=Name(id='print', ctx=Load()),
+                args=[
+                    Constant(value='hello from c')],
+                keywords=[]))],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Found: function_c
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='print', ctx=Load()),
+    args=[
+        Constant(value='hello from c')],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve print. Here's the function I found (5, 6, (6, 8)):
+        print("hello from c")
+Full Source:
+ === START SOURCE ===
+1	class D:
+2	    def __init__(self):
+3	        pass
+4	
+5	    def function_c(self):
+6	        print("hello from c")
+7	
+8	
+9	def function_e():
+10	    print("hello from e")
+11	
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Visiting FunctionDef Node: FunctionDef(
+    name='function_e',
+    args=arguments(
+        posonlyargs=[],
+        args=[],
+        kwonlyargs=[],
+        kw_defaults=[],
+        defaults=[]),
+    body=[
+        Expr(
+            value=Call(
+                func=Name(id='print', ctx=Load()),
+                args=[
+                    Constant(value='hello from e')],
+                keywords=[]))],
+    decorator_list=[],
+    type_params=[])
+INFO - ragtag.py2graph.make_graph - Found: function_e
+INFO - ragtag.py2graph.make_graph - Visiting Call Node: Call(
+    func=Name(id='print', ctx=Load()),
+    args=[
+        Constant(value='hello from e')],
+    keywords=[])
+WARNING - ragtag.py2graph.make_graph - Couldn't resolve print. Here's the function I found (9, 10, (10, 4)):
+    print("hello from e")
+Full Source:
+ === START SOURCE ===
+1	class D:
+2	    def __init__(self):
+3	        pass
+4	
+5	    def function_c(self):
+6	        print("hello from c")
+7	
+8	
+9	def function_e():
+10	    print("hello from e")
+11	
+==== END SOURCE ===
+
+INFO - ragtag.py2graph.make_graph - Starting LSP Server with Source Path: /home/anurag/projects/ml/RAGTAG/tests/golden/simple_test
+INFO - ragtag.py2graph.make_graph - Attempting to find definition for print (/home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py:(10, 4))
+INFO - ragtag.py2graph.make_graph - Found definition!
+[Location(uri='file:///home/anurag/projects/ml/RAGTAG/venv/lib/python3.12/site-packages/jedi/third_party/typeshed/stdlib/3/builtins.pyi', range=Range(start=Position(line=1143, character=4), end=Position(line=1143, character=9)))]
+INFO - ragtag.py2graph.make_graph - Attempting to find definition for A (/home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py:(11, 8))
+INFO - ragtag.py2graph.make_graph - Found definition!
+[Location(uri='file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py', range=Range(start=Position(line=3, character=6), end=Position(line=3, character=7)))]
+INFO - ragtag.py2graph.make_graph - Found Subgraph for URI: file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py
+INFO - ragtag.py2graph.make_graph - Looking for A in linked visitor
+INFO - ragtag.py2graph.make_graph - Found Nodes on Line 4
+INFO - ragtag.py2graph.make_graph - Searching Node: A
+INFO - ragtag.py2graph.make_graph - Found matching Node: <ragtag.py2graph.graph_types.Node object at 0x7b545a7e02c0>
+INFO - ragtag.py2graph.make_graph - Attempting to find definition for function_d (/home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py:(12, 6))
+INFO - ragtag.py2graph.make_graph - Found definition!
+[Location(uri='file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py', range=Range(start=Position(line=4, character=8), end=Position(line=4, character=18)))]
+INFO - ragtag.py2graph.make_graph - Found Subgraph for URI: file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py
+INFO - ragtag.py2graph.make_graph - Looking for function_d in linked visitor
+INFO - ragtag.py2graph.make_graph - Found Nodes on Line 5
+INFO - ragtag.py2graph.make_graph - Searching Node: module_a.A.function_d
+INFO - ragtag.py2graph.make_graph - Found matching Node: <ragtag.py2graph.graph_types.FunctionNode object at 0x7b545a7e0470>
+INFO - ragtag.py2graph.make_graph - Attempting to find definition for function_e (/home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py:(13, 4))
+INFO - ragtag.py2graph.make_graph - Found definition!
+[Location(uri='file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_b.py', range=Range(start=Position(line=8, character=4), end=Position(line=8, character=14)))]
+INFO - ragtag.py2graph.make_graph - Found Subgraph for URI: file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_b.py
+INFO - ragtag.py2graph.make_graph - Looking for function_e in linked visitor
+INFO - ragtag.py2graph.make_graph - Found Nodes on Line 9
+INFO - ragtag.py2graph.make_graph - Searching Node: module_b.function_e
+INFO - ragtag.py2graph.make_graph - Found matching Node: <ragtag.py2graph.graph_types.FunctionNode object at 0x7b545a7e0230>
+INFO - ragtag.py2graph.make_graph - Attempting to find definition for function_a (/home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py:(16, 0))
+INFO - ragtag.py2graph.make_graph - Found definition!
+[Location(uri='file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py', range=Range(start=Position(line=8, character=4), end=Position(line=8, character=14)))]
+INFO - ragtag.py2graph.make_graph - Found Subgraph for URI: file:///home/anurag/projects/ml/RAGTAG/tests/golden/simple_test/module_a.py
+INFO - ragtag.py2graph.make_graph - Looking for function_a in linked visitor
+INFO - ragtag.py2graph.make_graph - Found Nodes on Line 9
+INFO - ragtag.py2graph.make_graph - Searching Node: module_a.function_a
+INFO - ragtag.py2graph.make_graph - Found matching Node: <ragtag.py2graph.graph_types.FunctionNode object at 0x7b545a7e0830>

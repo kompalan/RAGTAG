@@ -1,9 +1,16 @@
-import module_b
+from module_b import function_e, B
+
+
+class A(B):
+    def function_d(self):
+        super().function_c()
+
 
 def function_a():
     print("hello!")
-    module_b.function_c()
+    a = A()
+    a.function_d()
+    function_e()
 
-class A:
-    def function_d(self):
-        function_a()
+
+function_a()
