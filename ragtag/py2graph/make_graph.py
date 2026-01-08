@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(
     filename=f"{__name__}.log",
     format="%(levelname)s - %(name)s - %(message)s",
-    level=logging.INFO,
+    level=logging.ERROR,
 )
 
 
@@ -25,7 +25,7 @@ class GlobalContext:
 
     def __init__(self):
         self.lsp = None
-        self.linking_table
+        self.linking_table = {}
 
 
 class ModuleDependencies(ast.NodeVisitor):
@@ -299,17 +299,25 @@ class Subgraph:
         merged_graph: nx.DiGraph,
         subgraphs: Dict[str, Subgraph],
     ):
+        all_imports = []
         for import_node in self.visitor.imports:
-            import_name = None
             if isinstance(import_node.node, ast.ImportFrom):
-                import_name = import_node.node.module
+                all_imports.append((import_node.node.module, import_node))
             if isinstance(import_node.node, ast.Import):
-                # TODO: We're only taking the first name here. This WILL break
-                # for multiple imports. On the list to fix
-                import_name = import_node.node.names[0]
-            else:
-                continue
+                for name in import_node.node.names:
+                    all_imports.append((name, import_node))
 
+        for import_name, import_node in all_imports:
+            # import_name = None
+            # if isinstance(import_node.node, ast.ImportFrom):
+            #     import_name = import_node.node.module
+            # if isinstance(import_node.node, ast.Import):
+            #     # TODO: We're only taking the first name here. This WILL break
+            #     # for multiple imports. On the list to fix
+            #     import_name = import_node.node.names[0]
+            # else:
+            #     continue
+            #
             logger.debug(f"Found Import: {import_name}\n\t{ast.dump(import_node.node)}")
 
             if other_subgraph.visitor.toplevel_name == import_name:
@@ -484,15 +492,14 @@ def make_subgraphs(
         # lsp.open_file(py_file)
         with open(py_file, "r") as f:
             source_code = f.read()
-            tree = ast.parse(source_code)
-            # try:
-            #     tree = ast.parse(source_code)
-            # except SyntaxError as e:
-            #     logger.info(
-            #         f"Skipping file {py_file} due to SyntaxError thrown by ast: {str(e)}"
-            #     )
-            #     continue
-            #
+            try:
+                tree = ast.parse(source_code)
+            except SyntaxError as e:
+                logger.info(
+                    f"Skipping file {py_file} due to SyntaxError thrown by ast: {str(e)}"
+                )
+                continue
+
             module_name = py_file.stem
             visitor = ModuleDependencies(
                 module_name=module_name, filepath=str(py_file), lsp=lsp
@@ -514,9 +521,15 @@ def link_subgraphs(
     for uri, subgraph in subgraphs.items():
         dep_graph = nx.compose(dep_graph, subgraph.graph)
 
+    combs = itertools.permutations(subgraphs.values(), 2)
     # For each unique pair of subgraphs, link functions, imports and classes
-    for subgraph_a, subgraph_b in itertools.combinations(subgraphs.values(), 2):
-        dep_graph = subgraph_a.link(src_path, subgraph_b, dep_graph, subgraphs)
+    for i, (subgraph_a, subgraph_b) in enumerate(combs):
+        logger.info(f"Processing imports for subgraph {i+1}")
+        dep_graph = subgraph_a._link_imports(src_path, subgraph_b, dep_graph, subgraphs)
+
+    for i, subgraph in enumerate(subgraphs.values()):
+        logger.info(f"Processing functions for subgraph {i+1}/{len(subgraphs)}")
+        subgraph._link_functions(src_path, None, dep_graph, subgraphs)
 
     return dep_graph
 

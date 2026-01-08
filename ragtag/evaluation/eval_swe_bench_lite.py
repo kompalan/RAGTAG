@@ -17,8 +17,10 @@ Dependencies: datasets, networkx
 
 from typing import Iterable, Optional
 from ..py2graph.make_graph import make_graph_from_github, save_graph_picture_to_file
+from ..py2graph.serializer import serialize
 import networkx as nx
 from datasets import load_dataset
+import os
 
 
 def samples_from_dataset(limit: Optional[int] = None) -> Iterable[dict]:
@@ -38,13 +40,22 @@ for sample in samples_from_dataset(limit=None):
         repo_url = f"https://github.com/{repo}"
         setup_commit = f"{sample.get('environment_setup_commit', None)}"
 
+        if (repo_name, setup_commit) in seen:
+            continue
+
+        seen.add((repo_name, setup_commit))
+
         graph: Optional[nx.DiGraph] = make_graph_from_github(
             repo_name, repo_url, setup_commit
         )
 
         if graph:
-            print(f"Writing {repo_name}")
-            save_graph_picture_to_file(
-                graph, f"plots/swebench_graphs/{repo_name}_graph_{setup_commit}.png"
-            )
-    break
+            dir = f"data/{repo_name}_{setup_commit}"
+            os.mkdir(dir)
+            serialize(f"{dir}/graph_{repo_name}_{setup_commit}.tar.gz", graph)
+
+        # if graph:
+        # print(f"Writing {repo_name}")
+        # save_graph_picture_to_file(
+        #     graph, f"plots/swebench_graphs/{repo_name}_graph_{setup_commit}.png"
+        # )
